@@ -38,7 +38,14 @@ std::string generate_token(size_t length) {
 bool is_token_valid(const std::string& token) {
     std::string sql = "SELECT user_id FROM Sessions WHERE auth_token = ?";
     sqlite3_stmt* stmt;
+    std::cerr << "TEST!! is_token_valid " << token << std::endl;
     
+    // Remove "Bearer " prefix if it exists
+    std::string clean_token = token;
+    if (clean_token.substr(0, 7) == "Bearer ") {
+        clean_token = clean_token.substr(7);
+    }
+
     // Prepare the SQL statement
     if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
         std::cerr << "Error preparing token validation query: " << sqlite3_errmsg(db) << std::endl;
@@ -46,17 +53,37 @@ bool is_token_valid(const std::string& token) {
     }
 
     // Bind the token to the query
-    sqlite3_bind_text(stmt, 1, token.c_str(), -1, SQLITE_STATIC);
+    if (sqlite3_bind_text(stmt, 1, clean_token.c_str(), -1, SQLITE_STATIC) != SQLITE_OK) {
+        std::cerr << "Error binding token: " << sqlite3_errmsg(db) << std::endl;
+        sqlite3_finalize(stmt);
+        return false;
+    }
 
     // Execute the query and check if a row was returned
-    bool valid = sqlite3_step(stmt) == SQLITE_ROW;
+    int result = sqlite3_step(stmt);
+    bool valid = (result == SQLITE_ROW);
+
+    // Debug output
+    if (result == SQLITE_DONE) {
+        std::cerr << "TEST!! No matching rows found" << std::endl;
+    } else if (result != SQLITE_ROW && result != SQLITE_DONE) {
+        std::cerr << "TEST!! Error executing query: " << sqlite3_errmsg(db) << std::endl;
+    }
 
     // Finalize the statement
     sqlite3_finalize(stmt);
 
+    // More debug output
+    if (valid) {
+        std::cerr << "TEST!! VALIDNO" << std::endl;
+    } else {
+        std::cerr << "TEST!! NIJE VALIDNO" << std::endl;
+    }
 
     return valid;
 }
+
+
 
 
 void handle_get_profile(const std::string& token, http::response<http::string_body>& res) {
@@ -734,6 +761,8 @@ void handle_order_actions(const std::string& body, const std::string& token, htt
 void handle_request(http::request<http::string_body> req, http::response<http::string_body>& res) {
     std::string body = req.body();
     std::string token = std::string(req[http::field::authorization]);
+
+    std::cerr << "TEST!! handle_request ";
 
     if (req.method() == http::verb::post) {
         if (req.target() == "/login") {

@@ -513,7 +513,7 @@ void show_dashboard(const std::string& host, int port, const std::string& token,
                 std::cout << "Logged out successfully.\n";
                 break; // Exit the dashboard menu after successful logout
             } else {
-                std::cerr << "Failed to log out. Response Code: " << response_code << "\n";
+                std::cerr << "Failed to log out." << "\n";
             }
         } else {
             std::cerr << "Invalid choice. Please try again.\n";

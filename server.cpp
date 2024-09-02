@@ -127,60 +127,111 @@ void handle_login(const std::string& body, http::response<http::string_body>& re
     if (pos != std::string::npos) {
         auto end_pos = body.find('&', pos);
         username = body.substr(pos + 9, end_pos == std::string::npos ? body.size() - pos - 9 : end_pos - pos - 9);
+    } else {
+        res.result(http::status::bad_request);
+        res.body() = "Username not found in request";
+        return;
     }
     pos = body.find("password=");
     if (pos != std::string::npos) {
         password = body.substr(pos + 9);
+    } else {
+        res.result(http::status::bad_request);
+        res.body() = "Password not found in request";
+        return;
     }
 
     // SQL query to fetch user ID and type
     std::string sql = "SELECT user_id, user_type FROM Korisnici WHERE username = ? AND password = ?";
     sqlite3_stmt* stmt;
-    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 2, password.c_str(), -1, SQLITE_STATIC);
-
-        if (sqlite3_step(stmt) == SQLITE_ROW) {
-            int user_id = sqlite3_column_int(stmt, 0);
-            std::string user_type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-            std::string token = generate_token(32);
-
-            // Insert the new session into the Sessions table
-            std::string insert_sql = "INSERT INTO Sessions (user_id, auth_token) VALUES (?, ?)";
-            sqlite3_stmt* insert_stmt;
-            if (sqlite3_prepare_v2(db, insert_sql.c_str(), -1, &insert_stmt, nullptr) == SQLITE_OK) {
-                sqlite3_bind_int(insert_stmt, 1, user_id);
-                sqlite3_bind_text(insert_stmt, 2, token.c_str(), -1, SQLITE_STATIC);
-
-                if (sqlite3_step(insert_stmt) == SQLITE_DONE) {
-                    // Create JSON response
-                    json::object response_body;
-                    response_body["success"] = true;
-                    response_body["token"] = token;
-                    response_body["user_type"] = user_type;
-
-                    std::string response_str = json::serialize(response_body);
-                    res.result(http::status::ok);
-                    res.body() = response_str;
-                } else {
-                    res.result(http::status::internal_server_error);
-                    res.body() = "Error creating session: " + std::string(sqlite3_errmsg(db));
-                }
-                sqlite3_finalize(insert_stmt);
-            } else {
-                res.result(http::status::internal_server_error);
-                res.body() = "Error preparing session insert: " + std::string(sqlite3_errmsg(db));
-            }
-        } else {
-            res.result(http::status::unauthorized);
-            res.body() = "Invalid username or password";
-        }
-        sqlite3_finalize(stmt);
-    } else {
+    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+        std::cerr << "Error preparing query: " << sqlite3_errmsg(db) << std::endl;
         res.result(http::status::internal_server_error);
-        res.body() = "Database query error: " + std::string(sqlite3_errmsg(db));
+        res.body() = "Database query error";
+        return;
     }
+
+    sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, password.c_str(), -1, SQLITE_STATIC);
+
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        int user_id = sqlite3_column_int(stmt, 0);
+        std::string user_type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        std::string token = generate_token(32);
+
+        // Remove all existing sessions for this user
+        std::string delete_sql = "DELETE FROM Sessions WHERE user_id = ?";
+        sqlite3_stmt* delete_stmt;
+        if (sqlite3_prepare_v2(db, delete_sql.c_str(), -1, &delete_stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "Error preparing delete statement: " << sqlite3_errmsg(db) << std::endl;
+            res.result(http::status::internal_server_error);
+            res.body() = "Error preparing session delete";
+            sqlite3_finalize(stmt);
+            return;
+        }
+
+        sqlite3_bind_int(delete_stmt, 1, user_id);
+        if (sqlite3_step(delete_stmt) != SQLITE_DONE) {
+            std::cerr << "Error removing old sessions: " << sqlite3_errmsg(db) << std::endl;
+            res.result(http::status::internal_server_error);
+            res.body() = "Error removing old sessions";
+            sqlite3_finalize(delete_stmt);
+            sqlite3_finalize(stmt);
+            return;
+        }
+        sqlite3_finalize(delete_stmt);
+
+        // Insert the new session into the Sessions table
+        std::string insert_sql = "INSERT INTO Sessions (user_id, auth_token) VALUES (?, ?)";
+        sqlite3_stmt* insert_stmt;
+        if (sqlite3_prepare_v2(db, insert_sql.c_str(), -1, &insert_stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "Error preparing insert statement: " << sqlite3_errmsg(db) << std::endl;
+            res.result(http::status::internal_server_error);
+            res.body() = "Error preparing session insert";
+            sqlite3_finalize(stmt);
+            return;
+        }
+
+        sqlite3_bind_int(insert_stmt, 1, user_id);
+        sqlite3_bind_text(insert_stmt, 2, token.c_str(), -1, SQLITE_STATIC);
+        if (sqlite3_step(insert_stmt) != SQLITE_DONE) {
+            std::cerr << "Error creating session: " << sqlite3_errmsg(db) << std::endl;
+            res.result(http::status::internal_server_error);
+            res.body() = "Error creating session";
+            sqlite3_finalize(insert_stmt);
+            sqlite3_finalize(stmt);
+            return;
+        }
+        sqlite3_finalize(insert_stmt);
+
+        // Create JSON response
+        json::object response_body;
+        response_body["success"] = true;
+        response_body["token"] = token;
+        response_body["user_type"] = user_type;
+
+        std::string response_str;
+        try {
+            response_str = json::serialize(response_body);
+        } catch (const std::exception& e) {
+            std::cerr << "Error serializing JSON: " << e.what() << std::endl;
+            res.result(http::status::internal_server_error);
+            res.body() = "Error generating response";
+            sqlite3_finalize(stmt);
+            return;
+        }
+
+        res.result(http::status::ok);
+        res.body() = response_str;
+    } else {
+        std::cerr << "Invalid username or password" << std::endl;
+        res.result(http::status::unauthorized);
+        res.body() = "Invalid username or password";
+    }
+
+    sqlite3_finalize(stmt);
 }
+
 
 
 // URL-decode a string
@@ -307,12 +358,18 @@ void handle_update_profile(const std::string& token, const std::string& body, ht
 
 // Handle logout request
 void handle_logout(const std::string& token, http::response<http::string_body>& res) {
-    if (is_token_valid(token)) {
+    // Remove "Bearer " prefix if it exists
+    std::string clean_token = token;
+    if (clean_token.substr(0, 7) == "Bearer ") {
+        clean_token = clean_token.substr(7);
+    }
+
+    if (is_token_valid(clean_token)) {
         // Delete the session from the Sessions table
         std::string delete_sql = "DELETE FROM Sessions WHERE auth_token = ?";
         sqlite3_stmt* delete_stmt;
         if (sqlite3_prepare_v2(db, delete_sql.c_str(), -1, &delete_stmt, nullptr) == SQLITE_OK) {
-            sqlite3_bind_text(delete_stmt, 1, token.c_str(), -1, SQLITE_STATIC);
+            sqlite3_bind_text(delete_stmt, 1, clean_token.c_str(), -1, SQLITE_STATIC);
             if (sqlite3_step(delete_stmt) == SQLITE_DONE) {
                 res.result(http::status::ok);
                 res.body() = "Logged out successfully";
@@ -330,6 +387,7 @@ void handle_logout(const std::string& token, http::response<http::string_body>& 
         res.body() = "Invalid or missing token";
     }
 }
+
 
 // Function to handle services menu
 void handle_services(const std::string& token, const std::string& body, http::response<http::string_body>& res) {

@@ -132,6 +132,7 @@ void get_seller_orders(const std::string& host, int port, const std::string& tok
 
 
 
+
 // Function to handle profile menu
 void handle_profile_menu(const std::string& host, int port, const std::string& token, const std::string& current_profile_type) {
     while (true) {
@@ -271,6 +272,7 @@ void handle_seller_orders_menu(const std::string& host, int port, const std::str
 }
 
 // Function to handle orders menu for buyers
+// Function to handle orders menu for buyers
 void handle_buyer_orders_menu(const std::string& host, int port, const std::string& token) {
     while (true) {
         std::cout << "\nOrders Menu (Buyer):\n";
@@ -283,33 +285,44 @@ void handle_buyer_orders_menu(const std::string& host, int port, const std::stri
         std::cin.ignore(); // Ignore leftover newline character
 
         if (orders_choice == 1) {
-            std::string response_data;
-            send_request(host, port, "/orders/my_orders", "", response_data, &token); // GET request
-            std::cout << "My Orders: " << response_data << std::endl;
+            // View My Orders
+            while (true) {
+                std::string response_data;
+                send_request(host, port, "/my_orders", "", response_data, &token); // GET request
+                std::cout << "My Orders: " << response_data << std::endl;
 
-            // Option to complete or cancel orders
-            std::cout << "Enter Order ID to complete/cancel or '0' to go back: ";
-            std::string order_id;
-            std::getline(std::cin, order_id);
+                // Submenu for completing or canceling orders
+                std::cout << "1. Complete an Order\n";
+                std::cout << "2. Cancel an Order\n";
+                std::cout << "3. Back to Orders Menu\n";
 
-            if (order_id != "0") {
-                std::cout << "1. Complete Order\n";
-                std::cout << "2. Cancel Order\n";
                 int action_choice;
                 std::cin >> action_choice;
                 std::cin.ignore(); // Ignore leftover newline character
 
-                std::string order_data = "order_id=" + order_id;
-                if (action_choice == 1) {
-                    order_data += "&status=Complete";
-                } else if (action_choice == 2) {
-                    order_data += "&status=Cancelled";
-                }
+                if (action_choice == 1 || action_choice == 2) {
+                    std::string order_id;
+                    std::cout << "Enter Order ID: ";
+                    std::getline(std::cin, order_id);
 
-                send_request(host, port, "/update_order_status", order_data, response_data, &token, false); // POST request
-                std::cout << "Order status updated: " << response_data << std::endl;
+                    std::string status = (action_choice == 1) ? "Complete" : "Cancelled";
+                    std::string order_data = "order_id=" + order_id + "&status=" + status;
+                    std::string response_data;
+
+                    long response_code = send_request(host, port, "/update_order_status", order_data, response_data, &token, false); // POST request
+                    if (response_code == 200) {
+                        std::cout << "Order status updated: " << status << std::endl;
+                    } else {
+                        std::cerr << "Failed to update order status. Response Code: " << response_code << "\n";
+                    }
+                } else if (action_choice == 3) {
+                    break; // Return to Orders Menu
+                } else {
+                    std::cerr << "Invalid choice. Please try again.\n";
+                }
             }
         } else if (orders_choice == 2) {
+            // Make an Order
             std::string service_id, quantity;
             std::cout << "Enter Service ID: ";
             std::getline(std::cin, service_id);

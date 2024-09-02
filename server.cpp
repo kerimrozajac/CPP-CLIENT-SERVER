@@ -1388,7 +1388,7 @@ void handle_request(http::request<http::string_body> req, http::response<http::s
         } else if (req.target() == "/update_service") {
             handle_update_service(token, body, res);
         } else if (req.target() == "/update_order_status") {
-        handle_update_order_status(token, body, res);
+            handle_update_order_status(token, body, res);
 
         /*
         } else if (req.target().find("/delete_service/") == 0) {

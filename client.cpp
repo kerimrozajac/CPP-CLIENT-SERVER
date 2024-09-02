@@ -3,14 +3,16 @@
 #include <string>
 #include <sstream>
 
-// Callback function for handling the data received
-size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
-    ((std::string*)userp)->append((char*)contents, size * nmemb);
-    return size * nmemb;
+size_t write_callback(void* contents, size_t size, size_t nmemb, std::string* userp) {
+    size_t total_size = size * nmemb;
+    userp->append((char*)contents, total_size);
+    return total_size;
 }
 
 // Function to send HTTP requests
-long send_request(const std::string& host, int port, const std::string& endpoint, const std::string& data, std::string& response_data, const std::string* token = nullptr, bool is_get = true) {
+long send_request(const std::string& host, int port, const std::string& endpoint, 
+                  const std::string& data, std::string& response_data, 
+                  const std::string* token = nullptr, bool is_get = true) {
     CURL* curl;
     CURLcode res;
     long response_code;
@@ -19,16 +21,17 @@ long send_request(const std::string& host, int port, const std::string& endpoint
     curl = curl_easy_init();
     if (curl) {
         std::string url = "http://" + host + ":" + std::to_string(port) + endpoint;
-        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 
         if (is_get) {
             curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
             if (!data.empty()) {
-                curl_easy_setopt(curl, CURLOPT_URL, (url + "?" + data).c_str()); // Append data to URL for GET requests
+                url += (url.find('?') == std::string::npos ? "?" : "&") + data;
             }
+            curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         } else {
             curl_easy_setopt(curl, CURLOPT_POST, 1L);
             curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data.c_str());
+            curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         }
 
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
@@ -36,7 +39,7 @@ long send_request(const std::string& host, int port, const std::string& endpoint
 
         if (token) {
             struct curl_slist* headers = nullptr;
-            headers = curl_slist_append(headers, ("Authorization: Bearer " + *token).c_str());
+            headers = curl_slist_append(headers, ("Authorization: " + *token).c_str());
             curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         }
 
@@ -111,51 +114,23 @@ void send_registration_request(const std::string& host, int port, const std::str
 }
 
 
-// Function to handle orders menu
-void handle_orders_menu(const std::string& host, int port, const std::string& token, const std::string& user_type) {
-    while (true) {
-        std::cout << "\nOrders Menu:\n";
-        std::cout << "1. View My Orders\n";
-        std::cout << "2. Make an Order\n";
-        std::cout << "3. Back\n";
+// Function to get seller orders
+void get_seller_orders(const std::string& host, int port, const std::string& token) {
+    // Create a string to store the response data
+    std::string response_data;
 
-        int orders_choice;
-        std::cin >> orders_choice;
-        std::cin.ignore(); // Ignore leftover newline character
+    // Send a request to get the seller orders
+    long response_code = send_request(host, port, "/seller_orders", "", response_data, &token); // GET request
 
-        if (orders_choice == 1) {
-            // View My Orders
-            std::string response_data;
-            send_request(host, port, "/my_orders", "", response_data, &token); // GET request
-            std::cout << "My Orders: " << response_data << std::endl;
-        } else if (orders_choice == 2) {
-            // Make an Order
-            std::string service_id;
-            std::cout << "Enter Service ID: ";
-            std::getline(std::cin, service_id);
-
-            int amount;
-            std::cout << "Enter Amount: ";
-            std::cin >> amount;
-            std::cin.ignore(); // Ignore leftover newline character
-
-            std::string order_data = "service_id=" + service_id + "&amount=" + std::to_string(amount);
-            std::string response_data;
-
-            long response_code = send_request(host, port, "/make_order", order_data, response_data, &token, false); // POST request
-            if (response_code == 201) {
-                std::cout << "Order placed successfully.\n";
-            } else {
-                std::cerr << "Failed to place order. Response Code: " << response_code << "\n";
-            }
-        } else if (orders_choice == 3) {
-            // Back
-            break; // Return to dashboard menu
-        } else {
-            std::cerr << "Invalid choice. Please try again.\n";
-        }
+    // Check the response code and output the result
+    if (response_code == 200) {
+        std::cout << "Seller Orders: " << response_data << std::endl;
+    } else {
+        std::cerr << "Failed to retrieve seller orders. Response Code: " << response_code << "\n";
     }
 }
+
+
 
 // Function to handle profile menu
 void handle_profile_menu(const std::string& host, int port, const std::string& token, const std::string& current_profile_type) {
@@ -209,7 +184,7 @@ void handle_profile_menu(const std::string& host, int port, const std::string& t
             while (true) {
                 std::cout << "\nProfile Type Menu:\n";
                 std::cout << "Your current Profile type is: " << current_profile_type << "\n";
-                std::cout << "1. Change Profile type to " << (current_profile_type == "Seller" ? "Buyer" : "Seller") << "\n"; // Option to change type
+                std::cout << "1. Change Profile type to " << (current_profile_type == "seller" ? "buyer" : "seller") << "\n"; // Option to change type
                 std::cout << "2. Exit\n";
 
                 int type_choice;
@@ -217,11 +192,11 @@ void handle_profile_menu(const std::string& host, int port, const std::string& t
                 std::cin.ignore(); // Ignore leftover newline character
 
                 if (type_choice == 1) {
-                    std::string new_profile_type = current_profile_type == "Seller" ? "Buyer" : "Seller";
-                    std::string update_data = "profile_type=" + new_profile_type;
+                    std::string new_profile_type = current_profile_type == "seller" ? "buyer" : "seller";
+                    std::string update_data = "user_type=" + new_profile_type;
                     std::string response_data;
 
-                    long response_code = send_request(host, port, "/update_profile_type", update_data, response_data, &token, false); // POST request
+                    long response_code = send_request(host, port, "/update_profile", update_data, response_data, &token, false); // POST request
 
                     if (response_code == 200) {
                         std::cout << "Profile type changed successfully to " << new_profile_type << ".\n";
@@ -335,15 +310,15 @@ void handle_buyer_orders_menu(const std::string& host, int port, const std::stri
                 std::cout << "Order status updated: " << response_data << std::endl;
             }
         } else if (orders_choice == 2) {
-            std::string service_id, amount;
+            std::string service_id, quantity;
             std::cout << "Enter Service ID: ";
             std::getline(std::cin, service_id);
             std::cout << "Enter Amount: ";
-            std::getline(std::cin, amount);
+            std::getline(std::cin, quantity);
 
-            std::string order_data = "service_id=" + service_id + "&amount=" + amount;
+            std::string order_data = "service_id=" + service_id + "&quantity=" + quantity;
             std::string response_data;
-            long response_code = send_request(host, port, "/orders/make_order", order_data, response_data, &token, false); // POST request
+            long response_code = send_request(host, port, "/make_order", order_data, response_data, &token, false); // POST request
 
             if (response_code == 201) {
                 std::cout << "Order created successfully.\n";
@@ -357,6 +332,8 @@ void handle_buyer_orders_menu(const std::string& host, int port, const std::stri
         }
     }
 }
+
+
 
 
 // Function to handle services menu
@@ -404,7 +381,7 @@ void handle_services_menu(const std::string& host, int port, const std::string& 
                 std::string response_data;
 
                 long response_code = send_request(host, port, "/create_service", service_data, response_data, &token, false); // POST request
-                if (response_code == 201) {
+                if (response_code == 200) {
                     std::cout << "Service created successfully.\n";
                 } else {
                     std::cerr << "Failed to create service. Response Code: " << response_code << "\n";
@@ -486,8 +463,9 @@ void show_dashboard(const std::string& host, int port, const std::string& token,
         std::cin >> dashboard_choice;
         std::cin.ignore(); // Ignore leftover newline character
 
-        if (dashboard_choice == 1) {
-            handle_orders_menu(host, port, token, user_type);
+        if (dashboard_choice == 1)  {
+            if (user_type == "seller") handle_seller_orders_menu(host, port, token);
+            else if (user_type == "buyer") handle_buyer_orders_menu(host, port, token);
         } else if (dashboard_choice == 2) {
             handle_services_menu(host, port, token, user_type);
         } else if (dashboard_choice == 3) {

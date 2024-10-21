@@ -1,66 +1,62 @@
-#include <curl/curl.h>
 #include <iostream>
 #include <string>
-#include <sstream>
+#include <boost/asio.hpp>
+#include <boost/beast.hpp>
 
-size_t write_callback(void* contents, size_t size, size_t nmemb, std::string* userp) {
-    size_t total_size = size * nmemb;
-    userp->append((char*)contents, total_size);
-    return total_size;
-}
+namespace beast = boost::beast;           // from <boost/beast.hpp>
+namespace http = beast::http;             // from <boost/beast/http.hpp>
+using tcp = boost::asio::ip::tcp;         // from <boost/asio/ip/tcp.hpp>
 
+// Function to send HTTP requests
 // Function to send HTTP requests
 long send_request(const std::string& host, int port, const std::string& endpoint, 
                   const std::string& data, std::string& response_data, 
                   const std::string* token = nullptr, bool is_get = true) {
-    CURL* curl;
-    CURLcode res;
-    long response_code;
+    try {
+        boost::asio::io_context io_context;
+        tcp::resolver resolver(io_context);
+        beast::tcp_stream stream(io_context);
 
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-    curl = curl_easy_init();
-    if (curl) {
-        std::string url = "http://" + host + ":" + std::to_string(port) + endpoint;
+        // Resolve the host
+        auto const results = resolver.resolve(host, std::to_string(port));
+        boost::asio::connect(stream.socket(), results.begin(), results.end());
 
-        if (is_get) {
-            curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
-            if (!data.empty()) {
-                url += (url.find('?') == std::string::npos ? "?" : "&") + data;
-            }
-            curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-        } else {
-            curl_easy_setopt(curl, CURLOPT_POST, 1L);
-            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data.c_str());
-            curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-        }
-
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_data);
-
+        // Set up the request
+        http::request<http::string_body> req(is_get ? http::verb::get : http::verb::post, endpoint, 11);
+        req.set(http::field::host, host);
+        req.set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
         if (token) {
-            struct curl_slist* headers = nullptr;
-            headers = curl_slist_append(headers, ("Authorization: " + *token).c_str());
-            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+            req.set(http::field::authorization, "Bearer " + *token);
         }
 
-        res = curl_easy_perform(curl);
-        if (res != CURLE_OK) {
-            std::cerr << "curl_easy_perform() failed: " << curl_easy_strerror(res) << std::endl;
-            response_code = -1; // Indicate error
-        } else {
-            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
-            std::cout << "HTTP Response Code: " << response_code << std::endl;
+        if (!data.empty()) {
+            req.set(http::field::content_type, "application/x-www-form-urlencoded");
+            req.body() = data;
+            req.prepare_payload();
         }
 
-        curl_easy_cleanup(curl);
-    } else {
-        std::cerr << "Failed to initialize CURL" << std::endl;
-        response_code = -1; // Indicate error
+        // Send the request
+        http::write(stream, req);
+
+        // Receive the response
+        beast::flat_buffer buffer;
+        http::response<http::string_body> res;
+        http::read(stream, buffer, res);
+
+        // Check response code
+        long response_code = res.result_int();
+        response_data = res.body();
+
+        // Close the stream gracefully
+        stream.socket().shutdown(tcp::socket::shutdown_both);
+        return response_code;
+
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << "\n";
+        return -1; // Indicate error
     }
-
-    curl_global_cleanup();
-    return response_code;
 }
+
 
 // Function to parse token and user type from the response data
 std::pair<std::string, std::string> parse_login_response(const std::string& response_data) {
@@ -113,7 +109,6 @@ void send_registration_request(const std::string& host, int port, const std::str
     }
 }
 
-
 // Function to get seller orders
 void get_seller_orders(const std::string& host, int port, const std::string& token) {
     // Create a string to store the response data
@@ -129,6 +124,8 @@ void get_seller_orders(const std::string& host, int port, const std::string& tok
         std::cerr << "Failed to retrieve seller orders. Response Code: " << response_code << "\n";
     }
 }
+
+
 
 
 

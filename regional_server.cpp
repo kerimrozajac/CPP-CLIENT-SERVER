@@ -12,7 +12,6 @@
 namespace beast = boost::beast;
 namespace http = beast::http;
 using tcp = boost::asio::ip::tcp;
-
 namespace json = boost::json;
 
 // SQLite database handler
@@ -1359,12 +1358,11 @@ void handle_order_actions(const std::string& body, const std::string& token, htt
 void handle_request(http::request<http::string_body> req, http::response<http::string_body>& res) {
     std::string body = req.body();
     std::string token = std::string(req[http::field::authorization]);
-    std::cerr << "HANDLE REQUEST TEST TARGET" << req.target() << "\n";
-    std::cerr << "HANDLE REQUEST TEST METHOD" << req.method() << "\n";
-    std::cerr << "HANDLE REQUEST BODY METHOD" << req.body() << "\n";
+    std::cerr << "HANDLE REQUEST TEST TARGET: " << req.target() << "\n";
+    std::cerr << "HANDLE REQUEST TEST METHOD: " << req.method() << "\n";
+    std::cerr << "HANDLE REQUEST BODY: " << req.body() << "\n";
 
     std::cerr << "TOKEN: " << token;
-
 
     if (req.method() == http::verb::post) {
         if (req.target() == "/login") {
@@ -1381,61 +1379,34 @@ void handle_request(http::request<http::string_body> req, http::response<http::s
             handle_create_service(token, body, res);
         } else if (req.target() == "/make_order") {
             handle_make_order(token, body, res);
-        
         } else if (req.target() == "/delete_service") {
             handle_delete_service(token, body, res);
-
         } else if (req.target() == "/update_service") {
             handle_update_service(token, body, res);
         } else if (req.target() == "/update_order_status") {
             handle_update_order_status(token, body, res);
-
-        /*
-        } else if (req.target().find("/delete_service/") == 0) {
-            std::string service_id = req.target().substr(16); // Extract service_id from the URL
-            handle_delete_service(token, service_id, res);
-        
-
-        } else if (req.target().find("/update_service/") == 0) {
-            auto pos = req.target().find('/', 17);
-            std::string service_id = req.target().substr(17, pos - 17);
-            std::string field_and_value = req.body();
-            handle_update_service(token, service_id, field_and_value, res);
-*/
-
         } else {
             res.result(http::status::not_found);
             res.body() = "Endpoint not found";
         }
     } else if (req.method() == http::verb::get) {
-            if (req.target() == "/my_orders") {
-            std::cerr << "HANDLE REQUEST OK";
+        if (req.target() == "/my_orders") {
+            std::cerr << "HANDLE REQUEST OK\n";
             handle_my_orders(token, res);
-            } 
-            else if (req.target() == "/all_services") {
+        } else if (req.target() == "/all_services") {
             handle_all_services(token, res);
-            }
-            else if (req.target() == "/loyalty/buyers") {
+        } else if (req.target() == "/loyalty/buyers") {
             handle_loyalty_buyers(token, res);
-            }
-            else if (req.target() == "/loyalty/sellers") {
+        } else if (req.target() == "/loyalty/sellers") {
             handle_loyalty_sellers(token, res);
-            }
-            else if (req.target() == "/my_services") {
+        } else if (req.target() == "/my_services") {
             handle_my_services(token, res);
-            }
-            
+        }
     } else {
         res.result(http::status::method_not_allowed);
         res.body() = "Method not allowed";
     }
 }
-
-
-
-
-
-
 
 void session(tcp::socket socket) {
     try {
@@ -1449,9 +1420,8 @@ void session(tcp::socket socket) {
         res.set(http::field::content_type, "text/plain");
         res.prepare_payload();
         http::write(socket, res);
-    }
-    catch (std::exception& e) {
-        std::cerr << "Exception in thread: " << e.what() << "\n";
+    } catch (std::exception& e) {
+        std::cerr << "Exception in session: " << e.what() << "\n";
     }
 }
 
@@ -1464,16 +1434,68 @@ void server(boost::asio::io_context& io_context, unsigned short port) {
     }
 }
 
+// Adjusted sync_with_central_server function
+void sync_with_central_server(const std::string& central_server_address, unsigned short central_server_port, const std::string& regional_server_id, int sync_interval) {
+    try {
+        boost::asio::io_context io_context;
+
+        while (true) {
+            // Create a TCP socket
+            tcp::socket socket(io_context);
+            tcp::resolver resolver(io_context);
+            auto endpoints = resolver.resolve(central_server_address, std::to_string(central_server_port));
+            boost::asio::connect(socket, endpoints);
+
+            // Prepare synchronization data
+            std::string sync_data = "Sync data from " + regional_server_id; // Replace with actual data retrieval logic
+            std::cout << "Syncing data: " << sync_data << "\n"; // Display the data being synced
+
+            // Create HTTP request for synchronization
+            http::request<http::string_body> req{http::verb::post, "/sync", 11};
+            req.set(http::field::host, central_server_address);
+            req.set(http::field::content_type, "application/json");
+            req.body() = sync_data; // Set the body of the request with the sync data
+            req.prepare_payload();
+
+            // Send the request to the central server
+            http::write(socket, req);
+
+            // Handle response (optional)
+            beast::flat_buffer buffer;
+            http::response<http::string_body> res;
+            http::read(socket, buffer, res);
+
+            std::cout << "Response from central server: " << res.body() << "\n";
+
+            // Close the socket
+            socket.close();
+
+            // Wait for the specified interval (in minutes) before the next sync
+            std::this_thread::sleep_for(std::chrono::minutes(sync_interval)); // Wait based on minutes
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Synchronization error: " << e.what() << "\n";
+    }
+}
+
 int main(int argc, char* argv[]) {
     try {
-        if (argc != 2) {
-            std::cerr << "Usage: http_server <port>\n";
+        if (argc != 7) { // Adjusted to check for 6 arguments (program name + 6 args)
+            std::cerr << "Usage: regional_server <user_port> <central_server_address> <central_server_port> <regional_server_id> <database> <sync_interval>\n";
             return 1;
         }
 
+        // Extract command line arguments
+        unsigned short user_port = static_cast<unsigned short>(std::stoi(argv[1]));
+        std::string central_server_address = argv[2];
+        unsigned short central_server_port = static_cast<unsigned short>(std::stoi(argv[3]));
+        std::string regional_server_id = argv[4];
+        std::string database_path = argv[5];
+        int sync_interval = std::stoi(argv[6]); // interval in minutes
+
         // Initialize SQLite
-        if (sqlite3_open("baza1.db", &db) != SQLITE_OK) {
-            std::cerr << "Failed to open database\n";
+        if (sqlite3_open(database_path.c_str(), &db) != SQLITE_OK) {
+            std::cerr << "Failed to open database: " << sqlite3_errmsg(db) << "\n";
             return 1;
         }
 
@@ -1493,12 +1515,16 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
+        // Start the synchronization thread
+        std::thread sync_thread(sync_with_central_server, central_server_address, central_server_port, regional_server_id, sync_interval);
+        sync_thread.detach(); // Detach the thread to run independently
+
+        // Start the server to handle user requests
         boost::asio::io_context io_context;
-        server(io_context, std::atoi(argv[1]));
+        server(io_context, user_port); // Function to start the user-facing server
 
         sqlite3_close(db);
-    }
-    catch (std::exception& e) {
+    } catch (std::exception& e) {
         std::cerr << "Exception: " << e.what() << "\n";
     }
 
